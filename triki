@@ -1,0 +1,136 @@
+#!/bin/bash
+
+read -r -d '' usage << EOF
+  ______     _ __   _ 
+ /_  __/____(_) /__(_)
+  / / / ___/ / //_/ / 
+ / / / /  / / , \/ /  
+/_/ /_/  /_/_/|_/_/   
+                      
+Text Retrieval - Wikipedia
+
+Usage: triki [input] [search] (processes)
+
+[input] can be a file or a Wikipedia URL.
+Triki will use the URLs found at [input].
+EOF
+
+mkbox() {
+read -r -d '' pytxt << EOF
+import sys
+
+def bold(text):
+  return f"\\033[1m{text}\\033[0m"
+
+def mkbox(val, style, line):
+  vlen = len(val)
+  cols = vlen + 2
+
+  if style == '-b':
+    val = bold(val)
+    h = '━'
+    v = '┃'
+    lt = '┣'
+    rt = '┫'
+    ut = '┳'
+    dt = '┻'
+    ct = '╋'
+    c1 = '┏'
+    c2 = '┓'
+    c3 = '┗'
+    c4 = '┛'
+  else:
+    h = '─'
+    v = '│'
+    lt = '├'
+    rt = '┤'
+    ut = '┬'
+    dt = '┴'
+    ct = '┼'
+    c1 = '┌'
+    c2 = '┐'
+    c3 = '└'
+    c4 = '┘'
+
+  sect = h * cols
+  if cols % 2 == 0:
+    line_s = h * int(cols / 2 - 1) + ut + h * int(cols / 2)
+  else:
+    line_s = h * int(cols / 2) + ut + h * int(cols / 2)
+
+  if line == 'n':
+    top = f"{c1}{sect}{c2}"
+    mid = f"\\n{v} {val} {v}"
+    bot = f"\\n{c3}{sect}{c4}"
+  elif line == 'e':
+    top = f"{c1}{sect}{c2}"
+    mid = f"\\n{v} {val} {v}"
+    bot = f"\\n{c3}{sect}{c4}"
+  elif line == 's':
+    top = f"{c1}{sect}{c2}"
+    mid = f"\\n{v} {val} {v}"
+    bot = f"\\n{c3}{line_s}{c4}"
+  elif line == 'w':
+    top = f"{c1}{sect}{c2}"
+    mid = f"\\n{v} {val} {v}"
+    bot = f"\\n{c3}{sect}{c4}"
+  else:
+    top = f"{c1}{sect}{c2}"
+    mid = f"\\n{v} {val} {v}"
+    bot = f"\\n{c3}{sect}{c4}"
+
+  return f"{top}{mid}{bot}"
+
+if sys.argv[1] == '-b':
+  print(mkbox(sys.argv[2], '-b', ''))
+elif sys.argv[1] == '-h':
+  print(mkbox(sys.argv[3], '', sys.argv[2]))
+else:
+  print(mkbox(sys.argv[1], '', ''))
+EOF
+
+  python3 -c "$pytxt" $@
+}
+
+search() {
+  # Custom User-Agent added to comply with Wikipedia scraper guidelines
+  # To be polite, do not use more than ~5 procs
+  res=$(curl -s -H 'User-Agent: Triki (just another Wiki-bot) v5.23 by delta-plus (j03grassl@gmail.com)' "$1" | pup 'p text{}' | perl -MHTML::Entities -pe 'decode_entities($_);' | rg -v '^[\s]*$' | sd '\n' ' ' | sd "’" "'" | sd ' \[[^a-zA-Z]+\] ' '\n' | sd '([,;:])\n' '$1 ' | sd '([A-Z])\.([A-Z])\.([A-Z]?)[.]?' '$1$2$3' | sd '\. ' '.\n' | sd '( [A-Z]?[a-z]?[a-z].)\n' '$1 ' | sd '\n([A-Z]\.)\n' ' $1 ' | sd '( [A-Z]\.)\n' '$1 ' | sd '( [ai][tn]\.) ' '$1\n' | sd ' " ' '" ' | sd '[ ]+' ' ' | sd ' \.$' '.' | sd '\n([a-z])' ' $1' | sd '^:[\s]*[^\s]+[\s]+' '' | sd " 's" "'s" | sd '([A-Za-z])- ' '$1-' | sd ' \-([A-Za-z])' '\-$1' | sd '\( ' '(' | sd ' \)' ')' | sd ' ([,;:]) ' '$1 ' | sd '^[ ]+' '' | sd '[ ]+$' '' | rg "$2")
+
+  if [[ -n "$res" ]]; then
+    mkbox -b "$(echo "$1" | sd '.*/' '' | sd '_' ' ')"
+    echo "$res" | sd '\n' '\n\n' | rg --no-context-separator -A 1 "$2"
+  fi
+}
+
+export -f search
+
+if ! [[ -f "$1" || "$1" =~ ^https?://..\.wikipedia.org ]] || ! [[ "$#" -ge 2 ]]; then
+  echo "  $usage"; echo; exit 1
+fi
+
+if [[ -f "$1" ]]; then
+  if cat "$1" | rg '/wiki/'; then
+    temp=$(mktemp)
+    cat "$1" | sd '/wiki/' '/api/rest_v1/page/html/' > "$temp"
+    input="$temp"
+  else
+    input="$1"
+  fi
+else
+  temp=$(mktemp)
+  curl -s "$1" | pup 'a attr{href}' | grep '^/wiki/' | grep -v ':' | sed 's|^|https://en.wikipedia.org|; s|#.*||' | sort -u | sd '/wiki/' '/api/rest_v1/page/html/' > "$temp"
+  input="$temp"
+fi
+
+if [[ -z "$3" ]]; then
+  procs=1
+else
+  procs="$3"
+fi
+
+parallel -j "$procs" -u search {} "'$2'" :::: "$input"
+
+if [[ -f "$temp" ]]; then
+  rm "$temp"
+fi
