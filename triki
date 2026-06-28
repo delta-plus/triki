@@ -9,10 +9,18 @@ read -r -d '' usage << EOF
                       
 Text Retrieval - Wikipedia
 
-Usage: triki [input] [search] (processes)
+Usage: triki (options) [input] [search] (processes)
 
 [input] can be a file or a Wikipedia URL.
 Triki will use the URLs found at [input].
+
+Options:
+-c - Compact. Doesn't add newlines between hits.
+-i - Include input URL at the top of the search list.
+-n - No sort. Search URLs in the order they are found.
+-q - Quiet. Doesn't print article titles.
+-r - Reassemble quotes with multiple sentences.
+-s - Single URL. Searches only the provided URL.
 EOF
 
 mkbox() {
@@ -92,18 +100,123 @@ EOF
   python3 -c "$pytxt" $@
 }
 
+dedupe() {
+  # Removes duplicates without sorting
+  input=$(</dev/stdin)
+  echo "$input" | awk '!seen[$0]++'
+}
+
+requote() {
+read -r -d '' pytxt << EOF
+import sys
+
+buf = ''
+
+for line in map(str, sys.stdin):
+    line = line.rstrip()
+
+    if len(buf) == 0:
+        if line.count('"') % 2:
+            buf += line.rstrip() + ' '
+        else: 
+            print(line)
+    else:
+        buf += line.rstrip() + ' '
+        if line.count('"') % 2:
+          print(buf.rstrip())
+          buf = ''
+EOF
+
+  input=$(</dev/stdin)
+  echo "$input" | python3 -c "$pytxt"
+}
+
 search() {
   # Custom User-Agent added to comply with Wikipedia scraper guidelines
   # To be polite, do not use more than ~5 procs
-  res=$(curl -s -H 'User-Agent: Triki (just another Wiki-bot) v5.23 by delta-plus (j03grassl@gmail.com)' "$1" | pup 'p text{}' | perl -MHTML::Entities -pe 'decode_entities($_);' | rg -v '^[\s]*$' | sd '\n' ' ' | sd "’" "'" | sd ' \[[^a-zA-Z]+\] ' '\n' | sd '([,;:])\n' '$1 ' | sd '([A-Z])\.([A-Z])\.([A-Z]?)[.]?' '$1$2$3' | sd '\. ' '.\n' | sd '( [A-Z]?[a-z]?[a-z].)\n' '$1 ' | sd '\n([A-Z]\.)\n' ' $1 ' | sd '( [A-Z]\.)\n' '$1 ' | sd '( [ai][tn]\.) ' '$1\n' | sd ' " ' '" ' | sd '[ ]+' ' ' | sd ' \.$' '.' | sd '\n([a-z])' ' $1' | sd '^:[\s]*[^\s]+[\s]+' '' | sd " 's" "'s" | sd '([A-Za-z])- ' '$1-' | sd ' \-([A-Za-z])' '\-$1' | sd '\( ' '(' | sd ' \)' ')' | sd ' ([,;:]) ' '$1 ' | sd '^[ ]+' '' | sd '[ ]+$' '' | rg "$2")
+  # Ugly, isn't it? But as far as sentence parsers go, it's pretty robust!
+  res=$(curl -s -H 'User-Agent: Triki (just another Wiki-bot) v5.23 by delta-plus (j03grassl@gmail.com)' "$1" \
+    | pup 'p text{}' \
+    | perl -MHTML::Entities -pe 'decode_entities($_);' \
+    | rg -v '^[\s]*$' \
+    | sd "\n(['\"])" '$1' \
+    | sd '\n' ' ' \
+    | sd "’" "'" \
+    | sd '\.\[[^a-zA-Z]+\]' '\.\n' \
+    | sd ' \[[^a-zA-Z]+\] ' ' ' \
+    | sd '([,;:])\n' '$1 ' \
+    | sd '([A-Z])\.([A-Z])\.([A-Z]?)[.]?' '$1$2$3' \
+    | sd '\. ' '.\n' \
+    | sd '( [A-Z]?[a-z]?[a-z].)\n' '$1 ' \
+    | sd '\n([A-Z]\.)\n' ' $1 ' \
+    | sd '( [A-Z]\.)\n' '$1 ' \
+    | sd '( [ai][tn]\.) ' '$1\n' \
+    | sd ' " ' '" ' \
+    | sd '[ ]+' ' ' \
+    | sd ' \.$' '.' \
+    | sd '\n([a-z])' ' $1' \
+    | sd '\n(.)$' '$1' \
+    | sd '^:[\s]*[^\s]+[\s]+' '' \
+    | sd " 's" "'s" \
+    | sd '([A-Za-z])- ' '$1-' \
+    | sd ' \-([A-Za-z])' '\-$1' \
+    | sd '\( ' '(' \
+    | sd ' \)' ')' \
+    | sd ' ([,;:]) ' '$1 ' \
+    | sd '\.mw-parser-output[^}]+\}' '' \
+    | sd "([.\!?][']?\")" '$1\n' \
+    | sd '^[ ]+' '' \
+    | sd '[ ]+$' '') 
+
+  if [[ "$rqte" -eq 0 ]]; then
+    res=$(echo "$res" | rg "$2")
+  else
+    res=$(echo "$res" | requote | rg "$2")
+  fi
 
   if [[ -n "$res" ]]; then
-    mkbox -b "$(echo "$1" | sd '.*/' '' | sd '_' ' ' | python3 -c "import sys, urllib.parse; [print(urllib.parse.unquote(line.rstrip('\n'))) for line in sys.stdin]")"
-    echo "$res" | sd '\n' '\n\n' | rg --no-context-separator -A 1 "$2"
+    if [[ "$shhh" -eq 0 ]]; then
+      mkbox -b "$(echo "$1" | sd '.*/' '' | sd '_' ' ' | python3 -c "import sys, urllib.parse; [print(urllib.parse.unquote(line.rstrip('\n'))) for line in sys.stdin]")"
+    fi
+    if [[ "$cmpc" -eq 0 ]]; then
+      echo "$res" | sd '\n' '\n\n' | rg --no-context-separator -A 1 "$2"
+    else
+      echo "$res" | rg "$2"
+    fi
   fi
 }
 
 export -f search
+
+OPTIONS=$(getopt -o cinqrsh --long help -- "$@" 2>/dev/null)
+
+cmpc=0
+incl=0
+nsrt=0
+shhh=0
+rqte=0
+sngl=0
+
+while getopts 'cinqrsh' opt; do
+  case ${opt} in
+    c) cmpc=1 ;;
+    i) incl=1 ;;
+    n) nsrt=1 ;;
+    q) shhh=1 ;;
+    r) rqte=1 ;;
+    s) sngl=1 ;;
+    h) echo "    $usage"; echo; exit 1 ;;
+  esac
+done 2>/dev/null
+
+export cmpc
+export incl
+export nsrt
+export shhh
+export rqte
+export sngl
+
+shift $((OPTIND - 1))
 
 if ! [[ -f "$1" || "$1" =~ ^https?://..\.wikipedia.org ]] || ! [[ "$#" -ge 2 ]]; then
   echo "  $usage"; echo; exit 1
@@ -119,7 +232,17 @@ if [[ -f "$1" ]]; then
   fi
 else
   temp=$(mktemp)
-  curl -s "$1" | pup 'a attr{href}' | grep '^/wiki/' | grep -v ':' | sed 's|^|https://en.wikipedia.org|; s|#.*||' | sort -u | sd '/wiki/' '/api/rest_v1/page/html/' > "$temp"
+  if [[ "$incl" -eq 1 ]] || [[ "$sngl" -eq 1 ]]; then
+    src=$(echo "$1" | sd '/wiki/' '/api/rest_v1/page/html/')
+    echo "$src" > "$temp"
+  fi
+  if [[ "$sngl" -eq 0 ]]; then
+    if [[ "$nsrt" -eq 0 ]]; then
+      curl -s "$1" | pup 'a attr{href}' | grep '^/wiki/' | grep -v ':' | sed 's|^|https://en.wikipedia.org|; s|#.*||' | sort -u | sd '/wiki/' '/api/rest_v1/page/html/' | rg -v "^$src$" >> "$temp"
+    else
+      curl -s "$1" | pup 'a attr{href}' | grep '^/wiki/' | grep -v ':' | sed 's|^|https://en.wikipedia.org|; s|#.*||' | dedupe | sd '/wiki/' '/api/rest_v1/page/html/' | rg -v "^$src$" >> "$temp"
+    fi
+  fi
   input="$temp"
 fi
 

@@ -17,3 +17,14 @@ triki [input] [search] (processes)
   
 [input] can be a file or a Wikipedia URL.  
 Triki will use the URLs found at [input].  
+  
+Options:  
+-c - Compact. Doesn't add newlines between hits.  
+-i - Include input URL at the top of the search list.  
+-n - No sort. Search URLs in the order they are found.  
+-q - Quiet. Doesn't print article titles.  
+-r - Reassemble quotes with multiple sentences.  
+-s - Single URL. Searches only the provided URL.  
+  
+Examples:  
+![Pic 1](examples/triki.png)
